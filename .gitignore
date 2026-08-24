@@ -1,0 +1,18 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# env & secrets
+.env
+.env.example
+
+# runtime artifacts
+runs/
+workspaces/
+results/
+
+# editors
+.vscode/
+.idea/

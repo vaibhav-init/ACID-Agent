@@ -1,0 +1,11 @@
+order_id,region,product,qty,unit_price
+1,north,widget,3,10.00
+2,south,gadget,2,15.00
+3,north,gadget,4,20.00
+4,east,widget,5,8.00
+5,north,doohickey,1,50.00
+6,west,gadget,3,12.00
+7,north,widget,10,5.00
+8,south,doohickey,2,25.00
+9,east,gadget,1,30.00
+10,north,gadget,2,35.00
