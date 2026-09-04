@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     react_max_memory: int = 15
     react_action_timeout_s: int = 180
 
+    # Backbone gateway: which CLI the backbone calls route through.
+    #   claude   -> `claude -p` (Claude Code subscription auth)
+    #   opencode -> `opencode run -m <opencode_model>` (opencode go
+    #               subscription; enables the Qwen model family — the paper's
+    #               backbone — for regime experiments at zero extra cost)
+    backbone: str = "claude"
+    opencode_bin: str = "opencode"
+    opencode_model: str = "opencode-go/qwen3.8-flash"
+
     # Ablation: force every gate verdict to PASS while still computing and
     # persisting all four signals. Isolates the transaction scaffolding
     # (decompose + explore) from the validation gate itself. Never set in .env.

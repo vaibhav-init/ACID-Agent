@@ -12,6 +12,7 @@ import os
 import subprocess
 
 from .config import get_settings
+from .llm import strip_ansi
 from .schemas import ExecResult
 from .tracing import traced
 
@@ -33,8 +34,16 @@ def claude_env() -> dict:
 
 @traced("claude_code.session", run_type="llm", summarize={"cwd": str})
 def run_claude(prompt: str, cwd, timeout_s: int | None = None) -> ExecResult:
-    """Run one headless Claude Code session with `prompt` in the given directory."""
+    """Run one headless agent session with `prompt` in the given directory.
+
+    With backbone=claude this is a Claude Code session (`--dangerously-skip-
+    permissions`); with backbone=opencode it is an opencode agent session
+    (`build` agent) on the opencode go subscription — the same harness role,
+    whichever gateway is active.
+    """
     s = get_settings()
+    if s.backbone == "opencode":
+        return _run_opencode_session(prompt, cwd, timeout_s or s.claude_timeout_s)
     cmd = [
         s.claude_bin,
         "-p", prompt,
@@ -64,6 +73,38 @@ def run_claude(prompt: str, cwd, timeout_s: int | None = None) -> ExecResult:
     except FileNotFoundError:
         return ExecResult(
             ok=False, stdout="", stderr=f"claude binary not found at '{s.claude_bin}'", returncode=-1
+        )
+
+
+def _run_opencode_session(prompt: str, cwd, timeout_s: int) -> ExecResult:
+    """One headless opencode agent session — the harness role of run_claude
+    on the opencode gateway. `--dir` roots the agent in the workspace; headless
+    `run` executes tools without interactive permission prompts."""
+    s = get_settings()
+    args = [s.opencode_bin, "run", "-m", s.opencode_model]
+    if cwd:
+        args += ["--dir", str(cwd)]
+    try:
+        proc = subprocess.run(
+            args + [prompt],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            cwd=str(cwd) if cwd else None,
+            env={k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")},
+            stdin=subprocess.DEVNULL,
+        )
+        return ExecResult(
+            ok=proc.returncode == 0,
+            stdout=strip_ansi(proc.stdout)[-12000:],
+            stderr=proc.stderr[-4000:],
+            returncode=proc.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return ExecResult(ok=False, stdout="", stderr="OPENCODE TIMEOUT", returncode=-1)
+    except FileNotFoundError:
+        return ExecResult(
+            ok=False, stdout="", stderr=f"opencode binary not found at '{s.opencode_bin}'", returncode=-1
         )
 
 

@@ -40,3 +40,5 @@ packages = ["acid_agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Note: skills are validated with pytest per skill dir (skills.py validate_skill).

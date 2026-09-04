@@ -1,12 +1,18 @@
-"""Backbone LLM access via the Claude Code CLI.
+"""Backbone LLM access via a headless CLI gateway.
 
 Every backbone call (planning, decision extraction, reflection, memory
-evolution) goes through a headless `claude -p` invocation on the CLI's own
-subscription auth. Stateless by design: each call is a fresh session with no
-shared context.
+evolution) goes through one of two gateways, selected by Settings.backbone:
+
+  claude   -> headless `claude -p` on the CLI's subscription auth
+  opencode -> headless `opencode run -m <model>` on the opencode go
+              subscription (the Qwen model family — the paper's backbone —
+              for regime experiments)
+
+Stateless by design: each call is a fresh session with no shared context.
 """
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -14,14 +20,52 @@ import tempfile
 from .config import get_settings
 from .tracing import traced
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escapes; opencode decorates its streams with them."""
+    return _ANSI.sub("", text)
+
+
+def _run_opencode(prompt: str, timeout_s: int, isolated: bool) -> str:
+    """One headless `opencode run` call.
+
+    stdout carries only the assistant's response; the status line and ANSI
+    decoration go to stderr. Non-isolated calls run in the process cwd with
+    full agent tools — the same documented exposure as the claude path.
+    Isolated calls use the read-only `plan` agent inside a fresh empty temp
+    dir: the opencode analogue of `claude --restricted` + empty cwd.
+    """
+    s = get_settings()
+    args = [s.opencode_bin, "run", "-m", s.opencode_model]
+    if isolated:
+        args += ["--agent", "plan"]
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
+    with tempfile.TemporaryDirectory(prefix="acid_isolated_") as sandbox:
+        proc = subprocess.run(
+            args + [prompt],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=env,
+            cwd=sandbox if isolated else None,
+            # See the claude path below: an inherited stdin fd can leak the
+            # caller's own heredoc source into the child session.
+            stdin=subprocess.DEVNULL,
+        )
+    if proc.returncode != 0:
+        raise RuntimeError(f"opencode CLI failed (rc={proc.returncode}): {proc.stderr[-300:]}")
+    return strip_ansi(proc.stdout)
+
 
 def _run_cli(prompt: str, timeout_s: int = 360, isolated: bool = False) -> str:
-    """One headless `claude -p` call.
+    """One headless backbone call, routed by Settings.backbone.
 
-    `isolated=True` makes the call as close to a bare model completion as this
-    CLI allows: `--restricted` drops the code-running tools and confines the file
-    tools to the working directory, and the working directory is a fresh empty
-    temp dir, so there is nothing for the model to read.
+    `isolated=True` makes the call as close to a bare model completion as the
+    CLI allows. On claude: `--restricted` drops the code-running tools and
+    confines the file tools to the working directory, and the working directory
+    is a fresh empty temp dir, so there is nothing for the model to read.
 
     This matters more than it looks. A plain `claude -p` is NOT a tool-free
     completion — it retains Read/Glob/Grep and will happily go find files. A
@@ -30,6 +74,8 @@ def _run_cli(prompt: str, timeout_s: int = 360, isolated: bool = False) -> str:
     plus `--restricted` combination actually holds.
     """
     s = get_settings()
+    if s.backbone == "opencode":
+        return _run_opencode(prompt, timeout_s=timeout_s, isolated=isolated)
     from .claude_runner import claude_env
 
     env = claude_env()
