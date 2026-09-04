@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     # (decompose + explore) from the validation gate itself. Never set in .env.
     gate_bypass: bool = False
 
+    # Interpretation review (2026-09-04, targets the hard-tier failure mode):
+    # proactive — before first codegen, an LLM probe challenges the FIRST reading
+    # of an ambiguous unit goal (distance metric, units, inclusion criteria) and
+    # may revise the decisions. Reactive — per-attempt answer candidates are
+    # compared when two attempts disagree (port of the reference's
+    # AnswerCandidateTracker, which the repo had never wired).
+    interpretation_review: bool = True
+    answer_candidates: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

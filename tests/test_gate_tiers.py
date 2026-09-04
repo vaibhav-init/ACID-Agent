@@ -238,6 +238,10 @@ def test_both_metrics_recorded_whichever_rule_gates(gate, monkeypatch):
 
 def test_paper_rule_has_no_watch_band_for_spans(gate, monkeypatch):
     # The paper states a single threshold for this signal, so it is binary.
-    monkeypatch.setattr(val.get_settings(), "gate_semantics", "paper")
+    # Pin the threshold too: Settings is a cached singleton fed by .env, and
+    # .env now carries a calibrated SPAN_DIVERGENCE_MIN (0.25).
+    s = val.get_settings()
+    monkeypatch.setattr(s, "gate_semantics", "paper")
+    monkeypatch.setattr(s, "span_divergence_min", 0.50)
     assert gate(span_divergence=0.51).review_decision == "pass"
     assert gate(span_divergence=0.49).review_decision == "retry"

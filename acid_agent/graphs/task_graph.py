@@ -92,6 +92,7 @@ def build_task_graph(ws: Workspace, tracer, run_id, task_slug: str | None = None
                 "feedback": "",
                 "report": {},
                 "status": "running",
+                "candidates": [],
             }
         )
         results = list(state["results"])
@@ -135,7 +136,10 @@ Committed (validated) unit results:
 {chr(10).join(f"- unit {r['unit']} ({r['goal']}): {r['output']}" for r in state['results'])}
 
 Produce the final answer to the original task. Be precise and concise;
-include the key number(s). If some units failed, answer with what succeeded.""")
+include the key number(s). If some units failed, answer with what succeeded.
+If unit outputs give competing values for the task's final quantity, compare
+their computation methods (definitions, filters, metrics) before choosing;
+do not choose based on recency.""")
         tracer.log("final_answer", answer=answer[:2000])
         return {"final_answer": answer}
 

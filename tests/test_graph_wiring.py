@@ -89,6 +89,11 @@ def fake_env(monkeypatch):
             # No evidence/code conflict -> probability_contrast is skipped, which
             # is the common case and must not fail the gate.
             return AnchorAlignment(anchor_checks=[])
+        if schema.__name__ == "InterpretationReview":
+            # Probe finds the reading standard and proposes nothing: the common
+            # path must not alter decisions or fail the unit.
+            from acid_agent.review import InterpretationReview
+            return InterpretationReview(ambiguous_terms=[], chosen_reading_standard=True)
         return Reflection(ok=True, feedback="")
 
     monkeypatch.setattr(unit_graph, "run_claude", fake_run_claude)
@@ -144,6 +149,7 @@ def _run_unit(fake_env, tmp_path, seed_code):
             "feedback": "",
             "report": {},
             "status": "running",
+            "candidates": [],
         }
     )
     tracer.close()

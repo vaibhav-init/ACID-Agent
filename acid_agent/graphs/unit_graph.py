@@ -17,7 +17,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
-from .. import confidence, memory
+from .. import confidence, memory, review
 from ..config import get_conn, get_settings
 from ..llm import ask, ask_structured
 from ..claude_runner import run_claude
@@ -47,6 +47,7 @@ class UnitState(TypedDict):
     feedback: str                    # validation feedback injected on retry
     report: dict
     status: str                      # running | committed | failed
+    candidates: list[dict]           # per-attempt answer candidates (review.py)
 
 
 EXPLORE_PROMPT = """You are exploring data READ-ONLY inside the current directory.
@@ -144,6 +145,12 @@ PREVIOUS ATTEMPT WAS REJECTED BY VALIDATION. Revise decisions accordingly: {stat
             if state["feedback"]
             else ""
         )
+        # Reactive review (port of the reference's AnswerCandidateTracker): when
+        # two attempts produced different answers, make the model compare method
+        # choices instead of picking on recency.
+        cand_block = review.candidate_block(state.get("candidates") or []) if s.answer_candidates else None
+        if cand_block:
+            feedback_note += chr(10) + chr(10) + cand_block
         prompt = f"""From the evidence below, extract the 2-5 critical analytical DECISIONS
 needed for this unit goal (joins, filters, granularity, formulas). Each must cite evidence.
 
@@ -152,11 +159,40 @@ Evidence:
 {state['evidence_summary'] or '(none)'}{feedback_note}"""
         result = ask_structured(prompt, Decisions)
         decisions = [d.text for d in result.decisions]
+
+        # Proactive interpretation review: challenge the FIRST reading of an
+        # ambiguous goal before any code exists. First attempt only — retries
+        # already carry gate feedback plus the candidate-comparison block.
+        if s.interpretation_review and state.get("attempt", 0) == 0 and decisions:
+            try:
+                probe = ask_structured(
+                    review.INTERPRETATION_PROMPT.format(
+                        task=state["task"],
+                        goal=state["goal"],
+                        evidence=(state["evidence_summary"] or "(none)")[:1500],
+                        decisions=chr(10).join("- " + d for d in decisions),
+                    ),
+                    review.InterpretationReview,
+                )
+                applied = review.apply_interpretation_review(decisions, probe)
+                tracer.log(
+                    "interpretation_review",
+                    unit_index=state["unit_index"],
+                    ambiguous_terms=probe.ambiguous_terms[:8],
+                    standard_reading=probe.chosen_reading_standard,
+                    revised=applied != decisions,
+                )
+                decisions = applied
+            except Exception as e:
+                # Fail-open: an unavailable backbone must not kill the unit.
+                tracer.log("interpretation_review_failed", unit_index=state["unit_index"], error=str(e)[:300])
+
         tracer.log("decisions", unit_index=state["unit_index"], attempt=state["attempt"], decisions=decisions)
         return {"decisions": decisions}
 
     def generate_execute(state: UnitState) -> dict:
         attempt = state["attempt"] + 1
+        candidates = list(state.get("candidates") or [])
         feedback_note = (
             f"""
 
@@ -164,6 +200,9 @@ PREVIOUS ATTEMPT WAS REJECTED. Fix this feedback: {state['feedback']}"""
             if state["feedback"]
             else ""
         )
+        cand_block = review.candidate_block(candidates) if s.answer_candidates else None
+        if cand_block:
+            feedback_note += chr(10) + chr(10) + cand_block
         prompt = f"""In the current directory, write a python script named `unit{state['unit_index']}.py`
 that accomplishes the unit goal using pandas (files are CSVs in '.'). Then RUN it and show its output.
 
@@ -189,6 +228,12 @@ The script must PRINT its key results clearly."""
 
         # Clean deterministic execution signal for the gate
         run: ExecResult = ws.run_script(f"unit{state['unit_index']}.py")
+        # Register this attempt's answer candidate (reactive review); a future
+        # retry then sees the disagreement block instead of silently switching.
+        if s.answer_candidates:
+            cand = review.last_number(run.stdout)
+            if cand is not None:
+                candidates.append({"value": cand, "attempt": attempt, "method": state["goal"][:120]})
         tracer.log(
             "generate_execute",
             unit_index=state["unit_index"],
@@ -204,6 +249,7 @@ The script must PRINT its key results clearly."""
             "exec_stdout": run.stdout,
             "exec_stderr": run.stderr,
             "exec_returncode": run.returncode,
+            "candidates": candidates,
         }
 
     def validate(state: UnitState) -> dict:
