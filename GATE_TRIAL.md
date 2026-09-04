@@ -307,3 +307,57 @@ the paper's actual contribution, has no evidence supporting it here and measurab
    min/run — sweep the other five domains cheaply, then spend ACID time only where baseline is
    imperfect but not hopeless.
 4. **Drop `easy-8` or fix its ground truth** before it dilutes another average.
+
+---
+
+# 2026-09-04 — Hard-tier follow-up: the gate tested where it could win
+
+Items 2 and 3 above are now executed, on `archeology-hard-7` (baseline 1/2 — the one
+hard-tier task that is imperfect but not hopeless). NOTE: `--task-ids` takes **list
+indices**, not task-id numbers — `archeology-hard-7` is index **6**.
+
+Four arms, fresh runs (baseline merges with the Sep-3 hard sweep for n=5):
+
+| arm | hard-7 | n | answers seen |
+|---|---|---|---|
+| `claude` (harness control) | **60%** (3/5) | 5 | 274 ×3, 295 ×1, 0 ×1 |
+| `claude-react` (first data ever) | 33% (1/3) | 3 | 274, 295, FAIL |
+| `claude-acid` + `GATE_BYPASS=1` (decomposition only) | **0%** (0/3) | 3 | 294/295 every run |
+| `claude-acid`, full gate (reference semantics) | **0%** (0/3) | 3 | 294/295 every run |
+
+Fisher exact: acid vs claude p=0.061; react vs claude p=1.0.
+
+## Findings
+
+1. **The transactional arm is worse than both controls on the discriminating task.**
+   All six ACID runs (bypass and gate alike) answered 294 or 295: decision extraction
+   commits to "within 0.1 degrees in both latitude and longitude" — a box (Chebyshev)
+   neighborhood — while the grader's 274 counts Euclidean distance. Six runs, same
+   wrong method, zero variance. The paper's consistency advantage appears here as
+   *consistently wrong*: the transaction commits early to one interpretation and the
+   unit loop cannot re-open it, while the harness sometimes re-derives the method.
+
+2. **The gate never fired where it mattered.** Under reference semantics the deciding
+   units scored span surprise ≤ 0.11 (retry threshold 0.50); 0 rejections in 7 gate
+   attempts. Reflection — scoped to the unit goal — explicitly endorsed the wrong
+   method ("Chebyshev distances computed correctly via full cross-product"). Every
+   gate component measures *evidence↔code consistency*, not *method correctness*:
+   a faithful implementation of a wrong decision passes all four components.
+
+3. **Combined with the easy-tier ablation, the gate now has no effect in either
+   direction**: it does not cause the easy-tier gain (bypass preserved 100%) and it
+   does not prevent the hard-tier failure (full gate = bypass = 0%). The claim the
+   data supports: decomposition + rollback helps where tasks are short, and costs
+   the exploratory freedom the harness uses to recover from a wrong first
+   interpretation on hard ones.
+
+4. **Calibration** (59 attempts, 22 runs, `scripts/calibrate_gate.py`): paper@0.50
+   rejects 33% of attempts, paper@0.25 rejects 11%, reference@0.50 rejects 11%.
+   `.env` now pins `GATE_SEMANTICS=reference` (the authors' released rule) with
+   `SPAN_DIVERGENCE_MIN=0.25` recorded as the calibrated paper-mode fallback.
+
+## Honest one-line summary (updated)
+
+Decomposition helps on easy tasks and hurts on hard ones; the validation gate is
+orthogonal to both — it polices self-consistency, which is exactly the thing a
+confidently wrong transaction has.
