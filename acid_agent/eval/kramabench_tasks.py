@@ -43,7 +43,8 @@ class KramaTask:
         EMPTY workspace and a 0.00 score that looks like an agent failure:
           1. exact relative path under input/
           2. glob patterns ("State MSA Identity Theft Data/*")
-          3. recursive search by basename (legal/ nests its files in
+          3. directory sources are expanded recursively
+          4. basename search, shallowest match wins (legal/ nests its files in
              subdirectories, so the exact path never matches)
         """
         files: dict[str, bytes] = {}

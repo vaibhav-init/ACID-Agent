@@ -75,7 +75,7 @@ def _run_kramabench_eval(agent: str, domain: str, runs: int, task_ids: str, tag:
             tasks = tasks[start:end+1]
         else:
             indices = list(map(int, task_ids.split(",")))
-            tasks = [tasks[i] for i in indices if i < len(tasks)]
+            tasks = [tasks[i] for i in indices if 0 <= i < len(tasks)]
     
     skipped = [t.id for t in tasks if not is_gradeable(t)]
     tasks = [t for t in tasks if is_gradeable(t)]
