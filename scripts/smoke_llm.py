@@ -1,4 +1,4 @@
-"""Quick live check of structured output (function_calling on DeepSeek)."""
+"""Quick live check of the Claude Code CLI backbone: plain text + structured output."""
 
 import sys
 from pathlib import Path

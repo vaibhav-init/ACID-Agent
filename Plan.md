@@ -2,7 +2,7 @@
 
 Blueprint for implementing **"Agentic Transactions: Towards ACID-Compliant Agent Systems"** (Sun, Wang, Li — Tsinghua University): an LLM data-agent harness where every unit of work is a _semantic transaction_ with commit-or-retry semantics, validated by confidence signals before anything touches persistent state.
 
-**v2 stack decisions:** LangChain + LangGraph for orchestration · an open-source coding harness (**OpenCode**) as the code-generation/execution backbone · **PostgreSQL** as the system of record (checkpoints, event log, memory graph, skill registry).
+**v2 stack decisions:** LangChain + LangGraph for orchestration · the **Claude Code CLI** (headless) as the code-generation/execution backbone · **PostgreSQL** as the system of record (checkpoints, event log, memory graph, skill registry).
 
 ---
 
@@ -22,7 +22,7 @@ Task ──► [Skill Router: validated skill exists?] ──yes──► invoke
   │    redundancy check: divergence > 0.45 ⇒ stop      │
   │ 2. DECISION EXTRACTION                             │
   │    structured decisions extracted from evidence    │
-  │ 3. CODE GENERATION + EXECUTION  ◄── OpenCode       │
+  │ 3. CODE GENERATION + EXECUTION  ◄── Claude Code    │
   │    (read-only phase, then append-only phase)       │
   │ 4. VALIDATION GATE                                 │
   │    • execution error?                              │
@@ -66,33 +66,33 @@ Tiny code-agent; no transactional machinery; would rewrite most of it anyway.
 
 Useful patterns for the isolation layer only; their runtimes fight staged execution and "failed agents leave no trace."
 
-### Option E — Wrap an Existing Closed Harness (Claude Agent SDK)
+### Option E — Let a Coding Harness Own the Whole Loop
 
-Cannot intercept the internal loop to insert confidence gates.
+Cannot intercept the internal loop to insert confidence gates. The harness is used as a *step executor*, not as the controller.
 
-> **Decision (v2):** **LangGraph orchestrates the ACID transaction loop** (Option B). Inside each unit, code generation + execution is delegated to an **open-source coding harness (OpenCode, headless)**. LangChain supplies the model/tool/prompt primitives used inside nodes. **PostgreSQL** holds all durable state.
+> **Decision (v2):** **LangGraph orchestrates the ACID transaction loop** (Option B). Inside each unit, code generation + execution is delegated to the **Claude Code CLI, driven headlessly**. LangChain supplies the model/tool/prompt primitives used inside nodes. **PostgreSQL** holds all durable state.
 
-### 2.1 How LangGraph + OpenCode Fit Together (integration pattern)
+### 2.1 How LangGraph + Claude Code Fit Together (integration pattern)
 
-**Pattern 1 — LangGraph is the brain, OpenCode is the hands (recommended):**
+**Pattern 1 — LangGraph is the brain, Claude Code is the hands (recommended):**
 
 ```
 LangGraph StateGraph (task level)
  └─ unit_node(i)  ──►  Unit StateGraph (transaction level)
-                        ├─ explore_node        → OpenCode `run` (read-only prompt) or direct LLM
-                        ├─ extract_decisions   → LangChain structured-output chain
-                        ├─ generate_execute    → OpenCode headless (`opencode run`) in workspace
+                        ├─ explore_node        → `claude -p` (read-only prompt) or direct LLM
+                        ├─ extract_decisions   → structured-output chain
+                        ├─ generate_execute    → `claude -p` headless in the workspace
                         ├─ validate_gate       → confidence engine + reflection judge
                         │     ├─ fail → conditional edge back (retry ≤2, feedback injected)
                         │     └─ pass → commit_node
                         └─ commit_node         → git commit + Postgres memory update
 ```
 
-- OpenCode runs **non-interactively** (`opencode run "<instruction>"`) pointed at the task workspace; we parse its emitted diffs/output.
-- **Read-only vs append-only** enforcement: snapshot git state before the call → allow OpenCode to work → if validation fails, `git checkout .` restores pre-call state (failed attempt leaves zero trace). If it passes, the diff is committed.
-- OpenCode's provider/model is configurable, so the backbone LLM stays swappable.
+- Claude Code runs **non-interactively** (`claude -p "<instruction>"`, `cwd` = the task workspace); we read the files it wrote and re-run them ourselves for a clean execution signal.
+- **Read-only vs append-only** enforcement: snapshot git state before the call → let the harness work → if validation fails, `git reset --hard` + `clean -fd` restores pre-call state (failed attempt leaves zero trace). If it passes, the diff is committed.
+- The backbone model is whatever the CLI is logged into; `CLAUDE_MODEL` pins it when an eval needs reproducibility.
 
-**Pattern 2 — OpenCode as the whole harness, LangGraph only wrapping retries/validation:** simpler but we lose control of internal steps (weaker exploration budgeting, no clean read-only phase). Not recommended.
+**Pattern 2 — the harness as the whole agent, LangGraph only wrapping retries/validation:** simpler but we lose control of internal steps (weaker exploration budgeting, no clean read-only phase). Not recommended — it is what the `claude` baseline arm measures.
 
 ### 2.2 Where LangGraph Is Used (concrete answers to "can we use LangGraph anywhere?")
 
@@ -109,7 +109,7 @@ Yes — it becomes the backbone in six places:
 
 | Dimension                 | Options                                                     | Recommendation                                                   |
 | ------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------- |
-| Process model             | Single asyncio process / multiprocessing / worker-per-agent | **asyncio single process**; OpenCode invoked as subprocess       |
+| Process model             | Single asyncio process / multiprocessing / worker-per-agent | **asyncio single process**; the CLI invoked as a subprocess      |
 | Validation gate placement | In-graph node / sidecar judge service                       | **In-graph node** calling local confidence model over HTTP       |
 | State ownership           | In-memory objects / DB as source of truth                   | **Postgres as source of truth**; LangGraph state is a view       |
 | Sub-agent transport       | Direct asyncio / message queue (Redis/NATS)                 | **Direct asyncio + Send API**; queue only if we scale out        |
@@ -135,34 +135,31 @@ Division of labor: **LangChain** = chat models, prompts, structured output, tool
 | Option              | Verdict                                                          |
 | ------------------- | ---------------------------------------------------------------- |
 | **Python 3.11+** ✅ | LangChain/LangGraph native; `ast` for code analysis; data stack  |
-| TypeScript/Node     | OpenCode itself is TS, but our orchestrator benefits from Python |
+| TypeScript/Node     | Fine for harness plugins, but our orchestrator benefits from Python |
 | Rust/Go             | Overkill                                                         |
 
 ### 3.2 Coding Harness / Execution Backbone (open-source)
 
-| Option           | Notes                                                                                                                         |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **OpenCode** ✅  | Open-source terminal coding agent (sst/opencode); multi-provider; **headless `opencode run`**; client/server + SDK; LSP-aware |
-| Aider            | Git-native pair-programming CLI; strong edit formats; less agentic                                                            |
-| Goose (Block)    | Extensible open-source agent; headless mode                                                                                   |
-| OpenHands        | Full platform (sandbox, browser); heavier                                                                                     |
-| Cline / Roo Code | VS Code-centric; harder to drive headless                                                                                     |
+| Option                | Notes                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| **Claude Code CLI** ✅ | Headless `claude -p`; subscription auth; file/bash tools built in; already installed and logged in |
+| Aider                 | Git-native pair-programming CLI; strong edit formats; less agentic                             |
+| Goose (Block)         | Extensible open-source agent; headless mode                                                    |
+| OpenHands             | Full platform (sandbox, browser); heavier                                                      |
+| Cline / Roo Code      | VS Code-centric; harder to drive headless                                                      |
 
-> ⚠️ **"freebuff"** — I could not identify an open-source agent harness by this name. Closest known projects are listed above; please confirm which you meant (see §8 Open Decisions).
+Integration detail: we drive the CLI **headlessly per step** with tightly scoped instructions ("explore these files read-only", "implement decision D as code"), capture stdout, and enforce staging via git snapshots around each call.
 
-Integration detail: we drive OpenCode **headlessly per step** with tightly scoped instructions ("explore these files read-only", "implement decision D as code"), capture stdout + diffs, and enforce staging via git snapshots around each call.
+### 3.3 Backbone LLM (reasoning model behind the harness + graph nodes)
 
-### 3.3 Backbone LLM (reasoning model behind OpenCode + LangChain nodes)
+One backbone for everything: the model the Claude Code CLI is logged into. Both agent arms share it, so the ACID-vs-baseline comparison isolates the transaction machinery rather than the model.
 
-| Option                              | Notes                                     |
-| ----------------------------------- | ----------------------------------------- |
-| **DashScope/Bailian (Qwen family)** | Paper's setup; OpenAI-compatible          |
-| GLM (Zhipu) via API                 | Paper's second backbone                   |
-| OpenRouter / Together / Fireworks   | Easy swapping across many open models     |
-| Anthropic / OpenAI direct           | Strongest models; watch cost on retries   |
-| Self-hosted via vLLM/SGLang         | Full control + native logprobs; needs GPU |
-
-All consumed through the **`openai` SDK** (or OpenCode's provider config) — swappable behind one interface.
+| Concern              | Handling                                                                       |
+| -------------------- | ------------------------------------------------------------------------------ |
+| Reproducible evals   | Pin `CLAUDE_MODEL` in `.env`; empty = whatever the CLI defaults to             |
+| Structured output    | No native function calling over `-p`: JSON Schema in the prompt, parse + retry |
+| Cost under retries   | Hard caps (2 retries/unit, 20 units) + bounded `MAX_THINKING_TOKENS`           |
+| Token logprobs       | Not exposed — hence the separate local confidence model (§3.4)                 |
 
 ### 3.4 Confidence Estimation (critical component)
 
@@ -175,15 +172,15 @@ All consumed through the **`openai` SDK** (or OpenCode's provider config) — sw
 | Verbalized confidence ("rate 0–1")                            | Cheapest, least reliable                                 |
 | P(True) / semantic entropy methods                            | Research-grade calibration, more complexity              |
 
-> Still required even with OpenCode: harness providers rarely expose token logprobs, and the paper explicitly uses a local small model for scoring.
+> Still required whatever the harness: hosted providers don't expose token logprobs, and the paper explicitly uses a local small model for scoring.
 
 ### 3.5 Code Execution Path
 
 | Option                                     | Verdict                                                  |
 | ------------------------------------------ | -------------------------------------------------------- |
-| **OpenCode's built-in bash/file tools** ✅ | Default exec path; matches "agent manipulates workspace" |
+| **Claude Code's bash/file tools** ✅       | Default exec path; matches "agent manipulates workspace" |
 | Jupyter kernel (`ipykernel`) side-session  | Optional for stateful multi-step data sessions           |
-| Docker container wrapping OpenCode         | ✅ for Competitive isolation + untrusted tasks           |
+| Docker container wrapping the harness      | ✅ for Competitive isolation + untrusted tasks           |
 | gVisor / Firecracker                       | Later hardening                                          |
 | E2B / Modal (cloud sandboxes)              | If no local Docker                                       |
 
@@ -261,7 +258,7 @@ Metrics: score (%), #code steps, tokens, $cost, consistency = √(avg per-task v
 
 ## 4. RECOMMENDED DEFAULT STACK (v2 one-liner)
 
-> **Python 3.11 · LangChain (models/prompts/tools) + LangGraph (transactional state machine, PostgresSaver, Send API) · OpenCode headless as the coding/execution backbone · swappable backbone LLM via OpenAI-compatible APIs · Qwen3-0.6B on vLLM for confidence scoring · PostgreSQL (+pgvector, optional AGE) for checkpoints/events/memory/skills · GitPython append-only workspace · Docker for competitive isolation · typer+pytest skill hub · LangSmith tracing · KramaBench eval.**
+> **Python 3.11 · LangChain (models/prompts/tools) + LangGraph (transactional state machine, PostgresSaver, Send API) · Claude Code CLI headless as the coding/execution backbone (subscription auth) · Qwen3-0.6B via `transformers` for confidence scoring · PostgreSQL (+pgvector, optional AGE) for checkpoints/events/memory/skills · GitPython append-only workspace · Docker for competitive isolation · typer+pytest skill hub · LangSmith tracing · KramaBench eval.**
 
 ---
 
@@ -279,7 +276,7 @@ Metrics: score (%), #code steps, tokens, $cost, consistency = √(avg per-task v
 ## 6. BUILD PHASES
 
 1. [ ] **Scaffolding** — repo layout, Pydantic schemas, config; `docker-compose` for Postgres (+pgvector); LangGraph skeleton (task-level + unit-level graphs); LangSmith hookup.
-2. [ ] **OpenCode runner** — headless invocation wrapper (scoped prompts, stdout/diff parsing), git snapshot → run → validate → commit-or-revert staging discipline.
+2. [ ] **Claude Code runner** — headless invocation wrapper (scoped prompts, stdout capture), git snapshot → run → validate → commit-or-revert staging discipline.
 3. [ ] **Transactional state** — Postgres schema (events/WAL, runs, units, validations); wire `AsyncPostgresSaver`; rollback = git revert + event tombstones.
 4. [ ] **Confidence engine** — vLLM-served Qwen3-0.6B scoring service; three divergence measures; threshold config.
 5. [ ] **Core loop** — full explore → decisions → codegen → validation gate → retry judge → commit in LangGraph; plain ReAct baseline (LangGraph `create_react_agent`) as ablation control.
@@ -297,11 +294,11 @@ Metrics: score (%), #code steps, tokens, $cost, consistency = √(avg per-task v
 | Risk                                       | Mitigation                                                                     |
 | ------------------------------------------ | ------------------------------------------------------------------------------ |
 | LangGraph API churn between versions       | Pin versions; isolate graph definitions in one module                          |
-| OpenCode headless output parsing fragility | Prefer its structured/SDK output modes; fall back to git-diff-based extraction |
-| Provider lacks logprobs                    | Local 0.6B confidence model (already planned)                                  |
+| Headless output parsing fragility          | Read the files the harness wrote and re-run them ourselves for the exec signal |
+| Backbone exposes no logprobs               | Local 0.6B confidence model (already planned)                                  |
 | Retry loops explode cost                   | Hard caps (2 retries/unit, 20 units), token budget guard                       |
 | Postgres becomes required infra            | Ship `docker-compose.yml`; graceful SQLite fallback for dev                    |
-| OpenCode subprocess hangs                  | Timeouts + kill-and-revert-to-snapshot semantics                               |
+| Harness subprocess hangs                   | Timeouts + kill-and-revert-to-snapshot semantics                               |
 | Git operations slow under many commits     | Batch artifact commits; pygit2 if needed                                       |
 | Confidence miscalibration (small model)    | Calibrate on held-out tasks; self-consistency fallback for critical gates      |
 | Docker unavailable                         | Subprocess + temp dirs fallback for competitive mode                           |
@@ -310,8 +307,8 @@ Metrics: score (%), #code steps, tokens, $cost, consistency = √(avg per-task v
 
 ## 8. OPEN DECISIONS (confirm before Phase 1)
 
-1. **Harness confirmation**: OpenCode OK as the coding backbone? And what did you mean by **"freebuff"** — I can't find a harness by that name; did you mean **Goose**, **Aider**, **Cline**, or something else?
-2. **Backbone LLM provider + API key** (Bailian/Qwen? OpenRouter? local vLLM?) — this configures both OpenCode and LangChain clients.
+1. **Harness confirmation**: is the Claude Code CLI OK as the coding backbone for both arms?
+2. **Backbone model**: pin one model for reproducible evals, or accept the CLI default?
 3. **Postgres**: OK to run via docker-compose locally? Any existing instance/connection string?
 4. **GPU** available for Qwen3-0.6B confidence server, or CPU-only acceptable?
 5. **Benchmark scope**: full KramaBench (104 tasks) or a subset (e.g., Environment domain, as in the paper's tables)?
@@ -323,8 +320,8 @@ Metrics: score (%), #code steps, tokens, $cost, consistency = √(avg per-task v
 
 Resolved before build kickoff:
 
-1. **Harness**: OpenCode (already installed at `~/.opencode/bin/opencode`) driven headlessly. "freebuff" never identified — proceeding with OpenCode.
-2. **Backbone LLM**: user has an **OpenAI or Anthropic direct key** → config supports both via `LLM_PROVIDER=openai|anthropic`; key goes in `.env`.
+1. **Harness**: the **Claude Code CLI** (`claude -p`, headless) drives both the ACID arm's `generate_execute` node and the raw baseline arm.
+2. **Backbone LLM**: whatever the CLI is logged into via the user's **Claude Code subscription** — no API key or third-party router in `.env`. `CLAUDE_MODEL` optionally pins the model so both arms are comparable across runs.
 3. **PostgreSQL**: via docker-compose (Docker 29.7.2 confirmed).
 4. **GPU (confirmed via nvidia-smi)**: NVIDIA MX450, 2 GB VRAM (~1.8 GB free).
    - **vLLM dropped** — impractical at 2 GB.

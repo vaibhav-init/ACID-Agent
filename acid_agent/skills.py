@@ -79,6 +79,7 @@ def validate_skill(name: str) -> bool:
         return False
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(test_file), "-q"],
+        stdin=subprocess.DEVNULL,  # see llm._run_cli
         capture_output=True,
         text=True,
         timeout=300,
@@ -91,6 +92,7 @@ def invoke_skill(name: str, args: list[str]) -> str:
     entry = SKILLS_DIR / name / "skill.py"
     proc = subprocess.run(
         [sys.executable, str(entry)] + args,
+        stdin=subprocess.DEVNULL,  # see llm._run_cli
         capture_output=True,
         text=True,
         timeout=600,

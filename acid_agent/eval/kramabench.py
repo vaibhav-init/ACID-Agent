@@ -11,6 +11,7 @@ Real KramaBench hookup: swap builtin_tasks() for loaders from the official repo.
 """
 
 import json
+import pathlib
 import re
 import time
 from dataclasses import dataclass, field
@@ -30,17 +31,32 @@ class Task:
     grader: Callable[[str], float] = lambda answer: 0.0
 
 
-def _first_number(text: str) -> float | None:
-    m = re.findall(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
-    return float(m[0]) if m else None
+def _numbers(text: str) -> list[float]:
+    # U+2212 MINUS SIGN is what models actually emit for negatives; the regex
+    # only accepts ASCII "-", so without this a negative reads as positive.
+    text = text.replace("\u2212", "-").replace("\u2796", "-")
+    out = []
+    for tok in re.findall(r"-?\d+(?:\.\d+)?", text.replace(",", "")):
+        try:
+            out.append(float(tok))
+        except ValueError:
+            pass
+    return out
 
 
 def _num_grader(expected: float, tol_rel: float = 0.02) -> Callable[[str], float]:
+    """Pass if ANY number in the answer is within tolerance.
+
+    Taking only the FIRST number scored correct answers as 0.0: agents narrate
+    ("across 99 rows, the average is 5.28") and the row count won the match.
+    Same rule as eval/kramabench_tasks.grade_numeric, so both suites agree.
+    """
+
     def grade(answer: str) -> float:
-        val = _first_number(answer)
-        if val is None:
-            return 0.0
-        return 1.0 if abs(val - expected) <= tol_rel * max(1.0, abs(expected)) else 0.0
+        for val in _numbers(answer):
+            if abs(val - expected) <= tol_rel * max(1.0, abs(expected)):
+                return 1.0
+        return 0.0
 
     return grade
 
@@ -134,39 +150,53 @@ def builtin_tasks() -> list[Task]:
     return [_make_revenue_task(), _make_mixed_dates_task(), _make_top_product_task()]
 
 
-def evaluate(agent_name: str, runner_fn: Callable[[Task], str], n_runs: int = 3, out_dir="results"):
-    """runner_fn(task) -> final answer string."""
-    tasks = builtin_tasks()
-    scores: dict[str, list[float]] = {t.id: [] for t in tasks}
-    for t in tasks:
-        for run in range(n_runs):
-            try:
-                answer = runner_fn(t)
-            except Exception as e:
-                print(f"[{agent_name}] {t.id} run {run}: ERROR {e}")
-                answer = ""
-            sc = t.grader(str(answer))
-            scores[t.id].append(sc)
-            print(f"[{agent_name}] {t.id} run {run}: score={sc}")
-
-    per_task_mean = {k: mean(v) for k, v in scores.items()}
-    all_runs = [s for v in scores.values() for s in v]
+def _report(agent_name: str, n_runs: int, scores: dict[str, list[float]]) -> dict:
+    """Score summary; safe to call mid-eval on partially filled `scores`."""
+    done = {k: v for k, v in scores.items() if v}
+    per_task_mean = {k: mean(v) for k, v in done.items()}
+    all_runs = [s for v in done.values() for s in v]
     overall = mean(all_runs) if all_runs else 0.0
-    variances = [variance(v) for v in scores.values() if len(v) > 1]
+    variances = [variance(v) for v in done.values() if len(v) > 1]
     consistency = (sum(variances) / len(variances)) ** 0.5 if variances else 0.0
-
-    report = {
+    return {
         "agent": agent_name,
         "n_runs": n_runs,
+        "runs_completed": len(all_runs),
         "per_task_mean": per_task_mean,
         "overall_score": round(overall * 100, 1),
         "consistency_sqrt_avg_var": round(consistency, 3),
         "raw_scores": scores,
         "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    out = __import__("pathlib").Path(out_dir)
+
+
+def evaluate(agent_name: str, runner_fn: Callable[[Task, int], str], n_runs: int = 3, out_dir="results"):
+    """runner_fn(task, run_index) -> final answer string.
+
+    The run index is passed through so each repetition gets its OWN workspace and
+    memory scope; sharing them across runs makes repetitions dependent and turns
+    the consistency metric into a measure of contamination.
+    """
+    tasks = builtin_tasks()
+    scores: dict[str, list[float]] = {t.id: [] for t in tasks}
+    out = pathlib.Path(out_dir)
     out.mkdir(exist_ok=True)
     path = out / f"eval_{agent_name}_{int(time.time())}.json"
+    for t in tasks:
+        for run in range(n_runs):
+            try:
+                answer = runner_fn(t, run)
+            except Exception as e:
+                print(f"[{agent_name}] {t.id} run {run}: ERROR {e}")
+                answer = ""
+            sc = t.grader(str(answer))
+            scores[t.id].append(sc)
+            print(f"[{agent_name}] {t.id} run {run}: score={sc}", flush=True)
+            # Checkpoint every run: a multi-hour eval that is interrupted must
+            # still leave the scores it already earned on disk.
+            path.write_text(json.dumps(_report(agent_name, n_runs, scores), indent=2))
+
+    report = _report(agent_name, n_runs, scores)
     path.write_text(json.dumps(report, indent=2))
     print(json.dumps({k: report[k] for k in ("agent", "overall_score", "consistency_sqrt_avg_var")}, indent=2))
     print(f"saved -> {path}")

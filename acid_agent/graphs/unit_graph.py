@@ -2,8 +2,8 @@
 
 explore (read-only, redundancy-bounded)
   -> extract_decisions
-  -> generate_execute  (OpenCode writes & runs a unit script; we re-run it for a clean signal)
-  -> validate          (execution + decision divergence + code-span divergence + reflection)
+  -> generate_execute  (Claude Code writes & runs a unit script; we re-run it for a clean signal)
+  -> validate          (execution + reflection + probability contrast + evidence surprise)
        pass -> commit   (git commit + memory evolution)
        fail -> rollback -> retry generate (<= MAX_RETRIES_PER_UNIT) or fail the unit
 
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from .. import confidence, memory
 from ..config import get_conn, get_settings
 from ..llm import ask, ask_structured
-from ..opencode_runner import run_opencode
+from ..claude_runner import run_claude
 from ..schemas import Decision, Evidence, ExecResult
 from ..validation import validate_unit
 from ..workspace import Workspace
@@ -42,6 +42,7 @@ class UnitState(TypedDict):
     exec_ok: bool                   # did the unit script run cleanly?
     exec_stdout: str
     exec_stderr: str
+    exec_returncode: int            # real exit code; the gate classifies on it
     attempt: int
     feedback: str                    # validation feedback injected on retry
     report: dict
@@ -81,7 +82,7 @@ def _extract_code(text: str) -> str:
     return ""
 
 
-def build_unit_graph(ws: Workspace, tracer, run_id):
+def build_unit_graph(ws: Workspace, tracer, run_id, task_slug: str | None = None):
     s = get_settings()
 
     # ---------- nodes ----------
@@ -94,23 +95,33 @@ def build_unit_graph(ws: Workspace, tracer, run_id):
             prompt = EXPLORE_PROMPT.format(
                 goal=state["goal"],
                 evidence=evidence or "(none yet)",
-                memory=memory.context_block() or "(empty)",
+                memory=memory.context_block(task_slug=task_slug) or "(empty)",
             )
-            res = run_opencode(prompt, cwd=ws.root)
-            obs_raw = res.stdout if res.ok else ""
-            if not obs_raw.strip():
-                # Fallback without opencode: LLM writes a profiling snippet, we run it.
-                code = ask(f"""Write ONE python script that explores the CSVs in the current
-directory for this goal and prints findings. Return only one python code block.
+            try:
+                # Primary: backbone writes ONE read-only profiling snippet, executed directly.
+                # ~5-12s vs ~30-90s for a full claude session; same evidence for the gate.
+                code = ask(f"""Write ONE short read-only python script (pandas is available) that explores the
+data files in the current directory for this goal and prints concrete findings.
+It must only READ files. Return only one python code block.
 
 {prompt}""")
                 snippet = _extract_code(code) or "import os; print(os.listdir())"
                 r = ws.run_code(snippet, name=f"explore_u{state['unit_index']}_r{rnd}.py")
                 obs_raw = r.stdout + chr(10) + r.stderr
-            obs = _summarize_observation(obs_raw, state["goal"])
+                if not r.ok and not r.stdout.strip():
+                    # Fallback: scripted profiling failed — escalate to a full claude session.
+                    res = run_claude(prompt, cwd=ws.root)
+                    obs_raw = res.stdout if res.ok else res.stderr
+                obs = _summarize_observation(obs_raw, state["goal"])
+            except Exception as e:
+                # Exploration is best-effort evidence gathering: a slow/failed
+                # router round must not kill the transaction unit.
+                tracer.log("explore_round_failed", unit_index=state["unit_index"], round=rnd, error=str(e)[:300])
+                break
             tracer.log("explore", unit_index=state["unit_index"], round=rnd, observation=obs)
 
-            # Redundancy check: stop when new observations add little beyond priors
+            # Redundancy check: PMI/token (nats) of the new observation against
+            # the priors. High => already predicted by an earlier round => stop.
             if priors and rnd >= s.exploration_min_rounds - 1:
                 try:
                     red = confidence.exploration_redundancy(obs, priors)
@@ -124,15 +135,24 @@ directory for this goal and prints findings. Return only one python code block.
         return {"prior_observations": priors, "evidence_summary": evidence}
 
     def extract_decisions(state: UnitState) -> dict:
+        # On retries this node runs again WITH the gate feedback, so decisions can
+        # be revised instead of staying frozen across attempts.
+        feedback_note = (
+            f"""
+
+PREVIOUS ATTEMPT WAS REJECTED BY VALIDATION. Revise decisions accordingly: {state['feedback']}"""
+            if state["feedback"]
+            else ""
+        )
         prompt = f"""From the evidence below, extract the 2-5 critical analytical DECISIONS
 needed for this unit goal (joins, filters, granularity, formulas). Each must cite evidence.
 
 Unit goal: {state['goal']}
 Evidence:
-{state['evidence_summary'] or '(none)'}"""
+{state['evidence_summary'] or '(none)'}{feedback_note}"""
         result = ask_structured(prompt, Decisions)
         decisions = [d.text for d in result.decisions]
-        tracer.log("decisions", unit_index=state["unit_index"], decisions=decisions)
+        tracer.log("decisions", unit_index=state["unit_index"], attempt=state["attempt"], decisions=decisions)
         return {"decisions": decisions}
 
     def generate_execute(state: UnitState) -> dict:
@@ -154,13 +174,17 @@ Known evidence:
 {state['evidence_summary'][:2000]}{feedback_note}
 
 The script must PRINT its key results clearly."""
-        res = run_opencode(prompt, cwd=ws.root)
+        res = run_claude(prompt, cwd=ws.root)
         script_path = ws.root / f"unit{state['unit_index']}.py"
         code = script_path.read_text(encoding="utf-8") if script_path.exists() else ""
 
         if not code:
-            # Fallback without opencode: backbone writes the script directly.
-            code = _extract_code(ask(prompt)) or "# no code produced"
+            # Fallback when claude returned nothing: backbone writes the script directly.
+            try:
+                code = _extract_code(ask(prompt)) or "# no code produced"
+            except Exception as e:
+                tracer.log("codegen_fallback_failed", unit_index=state["unit_index"], error=str(e)[:300])
+                code = "# no code produced"
             script_path.write_text(code, encoding="utf-8")
 
         # Clean deterministic execution signal for the gate
@@ -179,6 +203,7 @@ The script must PRINT its key results clearly."""
             "exec_ok": run.ok,
             "exec_stdout": run.stdout,
             "exec_stderr": run.stderr,
+            "exec_returncode": run.returncode,
         }
 
     def validate(state: UnitState) -> dict:
@@ -191,11 +216,13 @@ The script must PRINT its key results clearly."""
                 ok=state.get("exec_ok", False),
                 stdout=state["exec_stdout"],
                 stderr=state["exec_stderr"],
+                returncode=state.get("exec_returncode", 0),
             ),
             run_id=run_id,
             unit_index=state["unit_index"],
             attempt=state["attempt"],
             tracer=tracer,
+            goal=state["goal"],
         )
         return {"report": report.model_dump(), "feedback": report.feedback}
 
@@ -203,7 +230,7 @@ The script must PRINT its key results clearly."""
         sha = ws.commit(f"unit-{state['unit_index']}: {state['goal'][:80]}")
         summary = f"{state['goal']} => {state['exec_stdout'][-400:].strip()}"
         try:
-            memory.evolve_from_unit(summary, run_id=run_id, tracer=tracer)
+            memory.evolve_from_unit(summary, run_id=run_id, tracer=tracer, task_slug=task_slug)
         except Exception as e:
             tracer.log("memory_evolve_failed", error=str(e))
         tracer.log("commit", unit_index=state["unit_index"], git_commit=sha)
@@ -250,14 +277,14 @@ The script must PRINT its key results clearly."""
 
     g.add_edge(START, "explore")
     g.add_edge("explore", "extract_decisions")
-    g.add_edge("extract_decisions", "generate_execute")
     g.add_edge("generate_execute", "validate")
     g.add_conditional_edges(
         "validate",
         after_validate,
         {"commit": "commit", "retry": "retry_rollback", "fail": "fail_unit"},
     )
-    g.add_edge("retry_rollback", "generate_execute")
+    g.add_edge("retry_rollback", "extract_decisions")  # retries may revise decisions using gate feedback
+    g.add_edge("extract_decisions", "generate_execute")
     g.add_edge("commit", END)
     g.add_edge("fail_unit", END)
 

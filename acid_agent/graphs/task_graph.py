@@ -48,16 +48,16 @@ Known memory from past tasks:
 {memory}"""
 
 
-def build_task_graph(ws: Workspace, tracer, run_id):
+def build_task_graph(ws: Workspace, tracer, run_id, task_slug: str | None = None):
     s = get_settings()
-    unit_graph = build_unit_graph(ws, tracer, run_id)
+    unit_graph = build_unit_graph(ws, tracer, run_id, task_slug=task_slug)
 
     def plan_units(state: TaskState) -> dict:
         plan: UnitPlan = ask_structured(
             PLAN_PROMPT.format(
                 max_units=min(5, s.max_units),
                 task=state["task"],
-                memory=memory_mod.context_block(),
+                memory=memory_mod.context_block(task_slug=task_slug),
             ),
             UnitPlan,
         )

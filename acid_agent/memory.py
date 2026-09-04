@@ -12,13 +12,14 @@ from .llm import ask_structured
 from .schemas import MemoryOp, MemoryOps
 
 
-def remember(key: str, content: str, related_keys: list[str] | None = None, source_run=None):
+def remember(key: str, content: str, related_keys: list[str] | None = None, source_run=None, task_slug: str | None = None):
     with get_conn() as conn:
         conn.execute(
-            """INSERT INTO memory_nodes (key, content, source_run) VALUES (%s, %s, %s)
+            """INSERT INTO memory_nodes (key, content, source_run, task_slug) VALUES (%s, %s, %s, %s)
                ON CONFLICT (key) DO UPDATE SET content = EXCLUDED.content,
+                   task_slug = EXCLUDED.task_slug,
                    updated_at = now()""",
-            (key, content, source_run),
+            (key, content, source_run, task_slug),
         )
         for rel in related_keys or []:
             conn.execute(
@@ -49,20 +50,32 @@ def merge(src_key: str, dst_key: str):
         conn.execute("DELETE FROM memory_nodes WHERE key = %s", (src_key,))
 
 
-def all_keys(limit: int = 60) -> list[str]:
+def all_keys(limit: int = 60, task_slug: str | None = None) -> list[str]:
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT key FROM memory_nodes ORDER BY updated_at DESC LIMIT %s", (limit,)
-        ).fetchall()
+        if task_slug:
+            rows = conn.execute(
+                "SELECT key FROM memory_nodes WHERE task_slug = %s ORDER BY updated_at DESC LIMIT %s",
+                (task_slug, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT key FROM memory_nodes ORDER BY updated_at DESC LIMIT %s", (limit,)
+            ).fetchall()
     return [r[0] for r in rows]
 
 
-def context_block(max_chars: int = 3000) -> str:
+def context_block(max_chars: int = 3000, task_slug: str | None = None) -> str:
     """Render recent memory as a text block for agent prompts."""
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT key, content FROM memory_nodes ORDER BY updated_at DESC LIMIT 25"
-        ).fetchall()
+        if task_slug:
+            rows = conn.execute(
+                "SELECT key, content FROM memory_nodes WHERE task_slug = %s ORDER BY updated_at DESC LIMIT 25",
+                (task_slug,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT key, content FROM memory_nodes ORDER BY updated_at DESC LIMIT 25"
+            ).fetchall()
     lines = [f"- {k}: {c}" for k, c in rows]
     return chr(10).join(lines)[:max_chars]
 
@@ -82,24 +95,24 @@ Decide evolution operations. Rules:
 Prefer merging over inserting duplicates. Max 4 ops. Return [] if nothing is worth remembering."""
 
 
-def evolve_from_unit(summary: str, run_id=None, tracer=None) -> list[MemoryOp]:
+def evolve_from_unit(summary: str, run_id=None, tracer=None, task_slug: str | None = None) -> list[MemoryOp]:
     """Ask the memory LLM for evolution ops after a committed unit, then apply them."""
-    keys = all_keys()
+    keys = all_keys(task_slug=task_slug)
     result: MemoryOps = ask_structured(
         OPS_PROMPT.format(summary=summary[:2000], keys=keys), MemoryOps
     )
     ops = result.ops
     for op in ops:
         if op.op == "insert":
-            remember(op.key, op.content, op.related_keys, source_run=run_id)
+            remember(op.key, op.content, op.related_keys, source_run=run_id, task_slug=task_slug)
         elif op.op == "merge":
-            remember(op.key, op.content, source_run=run_id)
+            remember(op.key, op.content, source_run=run_id, task_slug=task_slug)
             for other in op.related_keys or []:
                 merge(other, op.key)
         elif op.op == "delete":
             forget(op.key)
         elif op.op == "split":  # treat as insert of the new fragment
-            remember(op.key, op.content, source_run=run_id)
+            remember(op.key, op.content, source_run=run_id, task_slug=task_slug)
         if tracer:
             tracer.log("memory_op", op=json.dumps(op.model_dump()))
     return ops

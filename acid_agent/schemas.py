@@ -28,11 +28,30 @@ class ExecResult(BaseModel):
 
 
 class ValidationReport(BaseModel):
+    """Outcome of one gate attempt.
+
+    Three-tier like the reference: a component may be `pass`, `watch`, `retry`
+    or `skipped`. Only `retry` forces a rollback — `watch` is recorded and lets
+    the attempt through, so a soft signal cannot burn a retry budget on its own.
+    """
+
     execution_ok: bool = True
-    decision_divergence: Optional[float] = None
-    max_code_span_divergence: Optional[float] = None
-    exploration_redundancy: Optional[float] = None
     reflection_ok: bool = True
+
+    # Gating signals, all in raw nats (see confidence.py).
+    max_span_surprise: Optional[float] = None    # reference: high => code contradicts evidence
+    max_span_divergence: Optional[float] = None  # paper: low  => code not grounded in evidence
+    contrast_min_ratio: Optional[float] = None   # low  => evidence prefers the alternative
+
+    # Diagnostic only — recorded, never gates (matches anchor_decision_surprise).
+    decision_surprise: Optional[float] = None
+    exploration_redundancy: Optional[float] = None
+
+    review_decision: Literal["pass", "watch", "retry"] = "pass"
+    components: dict = {}
+    watchlist: list[str] = []
+    probes: dict = {}
+
     passed: bool = False
     feedback: str = ""
 

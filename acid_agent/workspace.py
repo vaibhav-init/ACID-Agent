@@ -30,7 +30,10 @@ class Workspace:
         for name, content in (seed_files or {}).items():
             p = root / name
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
+            if isinstance(content, bytes):
+                p.write_bytes(content)  # binary seeds (xlsx etc.) must survive intact
+            else:
+                p.write_text(content, encoding="utf-8")
         repo.git.add(A=True)
         # allow-empty keeps head() valid even with no seed files
         repo.git.commit(m="init: seed workspace", allow_empty=True)
@@ -75,6 +78,9 @@ class Workspace:
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
+                # Agent-written code must not inherit the harness's stdin; see
+                # llm._run_cli for how that fd leaks a heredoc-launched caller.
+                stdin=subprocess.DEVNULL,
             )
             return ExecResult(
                 ok=proc.returncode == 0,

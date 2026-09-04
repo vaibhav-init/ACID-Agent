@@ -1,4 +1,4 @@
-"""End-to-end wiring test of the transaction-unit graph with fake LLM/OpenCode/confidence.
+"""End-to-end wiring test of the transaction-unit graph with fake LLM/claude/confidence.
 
 Requires Postgres running (docker compose up -d); skips otherwise.
 Proves: commit path commits + rolls back nothing; failure path exhausts retries,
@@ -24,6 +24,28 @@ def _db_up() -> bool:
 pytestmark = pytest.mark.skipif(not _db_up(), reason="Postgres not running (docker compose up -d)")
 
 
+@pytest.fixture(autouse=True)
+def _clean_db_writes():
+    """Delete rows this test's graphs write into the shared Postgres.
+
+    The unit graph is exercised directly (no `runs` row), so its validations /
+    events / units rows are orphans in the same database results are read from.
+    Analysis tools start from `runs` and so never see them, but leaving synthetic
+    surprise rows in a results database is a trap for any query that scans
+    `validations` directly.
+    """
+    yield
+    try:
+        with get_conn() as conn:
+            for tbl in ("validations", "events", "units"):
+                conn.execute(
+                    f"DELETE FROM {tbl} t WHERE NOT EXISTS "
+                    "(SELECT 1 FROM runs r WHERE r.run_id = t.run_id)"
+                )
+    except Exception:
+        pass  # test cleanup must never fail the suite
+
+
 @pytest.fixture()
 def fake_env(monkeypatch):
     from pydantic import BaseModel
@@ -32,13 +54,14 @@ def fake_env(monkeypatch):
     import acid_agent.validation as val_mod
     from acid_agent.graphs import unit_graph
     from acid_agent.schemas import Decision
+    from acid_agent.validation import AnchorAlignment
     from acid_agent.graphs.unit_graph import Decisions
 
     class Reflection(BaseModel):
         ok: bool = True
         feedback: str = ""
 
-    def fake_run_opencode(prompt, cwd, timeout_s=None):
+    def fake_run_claude(prompt, cwd, timeout_s=None):
         class R:
             ok = True
             stdout = "OBSERVATIONS: data.csv has 3 rows, one column v."
@@ -62,14 +85,36 @@ def fake_env(monkeypatch):
     def fake_ask_structured(prompt, schema):
         if schema.__name__ == "Decisions":
             return Decisions(decisions=[Decision(id="d1", text="sum column v", rationale="evidence")])
+        if schema.__name__ == "AnchorAlignment":
+            # No evidence/code conflict -> probability_contrast is skipped, which
+            # is the common case and must not fail the gate.
+            return AnchorAlignment(anchor_checks=[])
         return Reflection(ok=True, feedback="")
 
-    monkeypatch.setattr(unit_graph, "run_opencode", fake_run_opencode)
+    monkeypatch.setattr(unit_graph, "run_claude", fake_run_claude)
     monkeypatch.setattr(unit_graph, "ask", fake_ask)
     monkeypatch.setattr(unit_graph, "ask_structured", fake_ask_structured)
     monkeypatch.setattr(val_mod, "ask_structured", fake_ask_structured)
-    monkeypatch.setattr(conf_mod, "decision_divergence", lambda *a, **k: 0.9)
-    monkeypatch.setattr(conf_mod, "code_span_divergence", lambda *a, **k: 0.9)
+    # Surprise near zero = evidence supports the code = green. The old fakes
+    # returned 0.9, which under the corrected sign is a hard rejection.
+    monkeypatch.setattr(
+        conf_mod, "code_span_surprise",
+        lambda *a, **k: {"available": True, "max_surprise": 0.01,
+                         "max_divergence": 0.90, "n_scored": 1,
+                         "spans": [{"line_no": 1, "category": "call:sum", "span": "sum",
+                                    "cond_logp": -2.0, "prior_logp": -2.01,
+                                    "delta": 0.01, "surprise": 0.0,
+                                    "divergence": 0.90}]},
+    )
+    monkeypatch.setattr(
+        conf_mod, "decision_surprise",
+        lambda *a, **k: {"available": True, "max_surprise": 0.02, "n_scored": 1, "decisions": []},
+    )
+    monkeypatch.setattr(
+        conf_mod, "probability_contrast",
+        lambda *a, **k: {"available": False, "min_ratio": None, "probes": [],
+                         "n_scored": 0, "reason": "no LLM-flagged conflict"},
+    )
     monkeypatch.setattr(unit_graph.memory, "evolve_from_unit", lambda *a, **k: [])
     return unit_graph
 
