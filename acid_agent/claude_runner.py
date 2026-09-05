@@ -10,6 +10,7 @@ nothing here injects an API key or a third-party base URL.
 
 import os
 import subprocess
+from pathlib import Path
 
 from .config import get_settings
 from .llm import strip_ansi
@@ -81,16 +82,20 @@ def _run_opencode_session(prompt: str, cwd, timeout_s: int) -> ExecResult:
     on the opencode gateway. `--dir` roots the agent in the workspace; headless
     `run` executes tools without interactive permission prompts."""
     s = get_settings()
+    # opencode resolves --dir from its own internal cwd (client/server), so a
+    # relative workspace path fails with "Failed to change directory" even when
+    # the subprocess cwd is already correct. Always hand it an absolute path.
+    root = Path(cwd).resolve() if cwd else None
     args = [s.opencode_bin, "run", "-m", s.opencode_model]
-    if cwd:
-        args += ["--dir", str(cwd)]
+    if root:
+        args += ["--dir", str(root)]
     try:
         proc = subprocess.run(
             args + [prompt],
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            cwd=str(cwd) if cwd else None,
+            cwd=str(root) if root else None,
             env={k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")},
             stdin=subprocess.DEVNULL,
         )
