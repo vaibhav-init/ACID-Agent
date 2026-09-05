@@ -19,3 +19,9 @@ results/
 /vendor/
 # heavy benchmark data (downloadable via croissant.json; 1.3 GB)
 data/kramabench/
+
+# local dev / not part of the shipped implementation
+tests/
+GATE_TRIAL.md
+unit*.py
+explore_*.py
