@@ -25,3 +25,7 @@ tests/
 GATE_TRIAL.md
 unit*.py
 explore_*.py
+
+# docs
+*.md
+!README.md
