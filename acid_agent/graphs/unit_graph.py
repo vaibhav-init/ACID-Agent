@@ -61,14 +61,23 @@ Long-term memory:
 {memory}
 
 Instructions:
+- Files may be CSVs or Excel workbooks (.xlsx, multiple sheets) — inspect extensions
+  and sheet names before reading.
 - Inspect files/schemas/sample rows to make progress on the goal. DO NOT modify any file.
+- On the first round, dump the FULL schema: every file, sheet, column name, dtype,
+  row count, plus distinct values for any column with <= 20 distinct values
+  (filters, flags, cohort markers) — even if it looks irrelevant to the goal.
 - Focus on what is NEW relative to the known evidence above.
 - Finish by printing a short section 'OBSERVATIONS:' with concrete findings."""
 
 
 def _summarize_observation(raw_output: str, goal: str) -> str:
-    prompt = f"""Condense the following raw exploration output into 3-6 concrete factual
+    prompt = f"""Condense the following raw exploration output into concrete factual
 observations useful for the goal below. Facts only, no speculation.
+IMPORTANT: the schema is sacred — list EVERY file, sheet and column you saw with
+dtypes/row-counts, even columns that look irrelevant to the goal. A column the
+goal ignores (exclusion flags, cohort markers, units) may be exactly what a later
+decision needs; never drop schema facts to save space.
 
 Goal: {goal}
 Raw output:
@@ -103,7 +112,12 @@ def build_unit_graph(ws: Workspace, tracer, run_id, task_slug: str | None = None
                 # ~5-12s vs ~30-90s for a full claude session; same evidence for the gate.
                 code = ask(f"""Write ONE short read-only python script (pandas is available) that explores the
 data files in the current directory for this goal and prints concrete findings.
-It must only READ files. Return only one python code block.
+Files may be CSVs or Excel workbooks (.xlsx with multiple sheets) — handle both,
+and inspect extensions/sheet names before reading. It must only READ files.
+On the FIRST round, dump the full schema: every file, every sheet, every column
+name with dtype and row count, plus distinct values for any column with <= 20
+distinct values (filters, flags, cohort markers). Later rounds can go deeper.
+Return only one python code block.
 
 {prompt}""")
                 snippet = _extract_code(code) or "import os; print(os.listdir())"
@@ -151,12 +165,30 @@ PREVIOUS ATTEMPT WAS REJECTED BY VALIDATION. Revise decisions accordingly: {stat
         cand_block = review.candidate_block(state.get("candidates") or []) if s.answer_candidates else None
         if cand_block:
             feedback_note += chr(10) + chr(10) + cand_block
+        # Retry context: the gate feedback alone is thin — show the decisions
+        # what the previous attempt actually ran, so the revision targets code
+        # that existed rather than an abstraction of it.
+        prev_code = (state.get("code") or "").strip()
+        prev_code_note = (
+            f"""
+
+Previous attempt's code (rejected):
+```python
+{prev_code[:3000]}
+```"""
+            if state["feedback"] and prev_code
+            else ""
+        )
         prompt = f"""From the evidence below, extract the 2-5 critical analytical DECISIONS
 needed for this unit goal (joins, filters, granularity, formulas). Each must cite evidence.
+Decide against the FULL TASK — the unit goal is a sub-step, and the task's exact
+wording (cohort definitions, "in the study", rounding, which quantity is asked)
+outranks a paraphrase in the goal.
 
+Full task: {state['task']}
 Unit goal: {state['goal']}
 Evidence:
-{state['evidence_summary'] or '(none)'}{feedback_note}"""
+{state['evidence_summary'] or '(none)'}{feedback_note}{prev_code_note}"""
         result = ask_structured(prompt, Decisions)
         decisions = [d.text for d in result.decisions]
 
@@ -204,8 +236,11 @@ PREVIOUS ATTEMPT WAS REJECTED. Fix this feedback: {state['feedback']}"""
         if cand_block:
             feedback_note += chr(10) + chr(10) + cand_block
         prompt = f"""In the current directory, write a python script named `unit{state['unit_index']}.py`
-that accomplishes the unit goal using pandas (files are CSVs in '.'). Then RUN it and show its output.
+that accomplishes the unit goal using pandas (files are CSVs or Excel workbooks —
+use pd.read_csv / pd.read_excel; inspect extensions and sheet names first). Then RUN
+it and show its output.
 
+Full task: {state['task']}
 Unit goal: {state['goal']}
 Decisions to implement exactly:
 {chr(10).join('- ' + d for d in state['decisions'])}
