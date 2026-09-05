@@ -41,21 +41,21 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[confidence]"       # core + local scorer
 docker compose up -d                 # Postgres + pgvector
 python scripts/setup_confidence.py   # download Qwen3-0.6B
-opencode auth login                  # backbone (Qwen family); or `claude login`
+opencode auth login                  # backbone (Qwen family)
 ```
 
 ## Run
 
 ```bash
 # one task
-python scripts/acid_cli.py run-task "<question>" --agent claude-acid --data-dir path/to/csvs
+python scripts/acid_cli.py run-task "<question>" --agent acid --data-dir path/to/csvs
 
 # A/B evaluation
-python scripts/acid_cli.py eval --agent claude-acid --domain biomedical --runs 3
-python scripts/acid_cli.py eval --agent claude     --domain biomedical --runs 3
+python scripts/acid_cli.py eval --agent acid --domain biomedical --runs 3
+python scripts/acid_cli.py eval --agent baseline     --domain biomedical --runs 3
 ```
 
-`claude-acid` = full transaction machinery. `claude` = same model, one raw session, no machinery.
+`acid` = full transaction machinery. `baseline` = same model, one raw session, no machinery.
 Scores and consistency (`sqrt(mean per-task variance)`) land in `results/*.json`.
 
 ## Layout
