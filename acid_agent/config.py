@@ -9,13 +9,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Claude Code CLI (execution backbone for BOTH arms).
-    # Auth is the CLI's own subscription login — no API key or router lives here.
-    # claude_model is optional: empty = whatever the CLI is configured to use;
-    # pin it (e.g. "claude-sonnet-5") when an eval needs a reproducible backbone.
-    claude_bin: str = "claude"
-    claude_timeout_s: int = 900
-    claude_model: str = ""
+    # Headless agent session (execution backbone for BOTH arms).
+    # Auth is the opencode go subscription login — no API key or router lives here.
+    opencode_bin: str = "opencode"
+    opencode_model: str = "opencode-go/qwen3.7-plus"
+    session_timeout_s: int = 900
 
     # Postgres
     database_url: str = "postgresql://acid:acid@localhost:5433/acid_agent"
@@ -69,21 +67,16 @@ class Settings(BaseSettings):
     decision_surprise_warn: float = 0.10
     decision_surprise_retry: float = 0.50
 
-    # ReAct baseline (agent_type "claude-react"): the paper's `prompt` arm shape.
+    # ReAct baseline (agent_type "react"): the paper's `prompt` arm shape.
     # Defaults match the reference's run_kramabench.py (--max_steps 20,
     # --max_memory_length 15).
     react_max_steps: int = 20
     react_max_memory: int = 15
     react_action_timeout_s: int = 180
 
-    # Backbone gateway: which CLI the backbone calls route through.
-    #   claude   -> `claude -p` (Claude Code subscription auth)
-    #   opencode -> `opencode run -m <opencode_model>` (opencode go
-    #               subscription; enables the Qwen model family — the paper's
-    #               backbone — for regime experiments at zero extra cost)
-    backbone: str = "claude"
-    opencode_bin: str = "opencode"
-    opencode_model: str = "opencode-go/qwen3.8-flash"
+    # opencode go subscription; enables the Qwen model family — the paper's
+    # backbone — for regime experiments at zero extra cost
+    # opencode_model lives with the session settings above.
 
     # Ablation: force every gate verdict to PASS while still computing and
     # persisting all four signals. Isolates the transaction scaffolding

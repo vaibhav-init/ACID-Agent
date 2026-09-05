@@ -4,7 +4,7 @@ Two halves of this app trace very differently:
 
   * LangGraph invocations (task graph, unit graph) are instrumented for free by
     langchain-core once LANGSMITH_TRACING is in the OS environment.
-  * The backbone LLM calls are NOT. They are `claude -p` subprocesses, invisible
+  * The backbone LLM calls are NOT. They are headless CLI subprocesses, invisible
     to LangChain callbacks, so a trace would show empty graph nodes with no
     prompts, no outputs and no timing attribution. `@traced` below annotates
     them so the plan / decisions / codegen / reflection calls show up as real

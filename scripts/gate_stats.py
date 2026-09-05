@@ -5,8 +5,8 @@ rejecting attempts and forcing revisions. This reports, per run: units planned,
 attempts made, gate rejections, which component was red, and the surprise values.
 
 Usage:
-  python scripts/gate_stats.py                      # last 24h, claude-acid
-  python scripts/gate_stats.py --agent claude-acid --since-min 180
+  python scripts/gate_stats.py                      # last 24h, acid
+  python scripts/gate_stats.py --agent acid --since-min 180
 """
 
 import argparse
@@ -17,7 +17,7 @@ from acid_agent.config import get_conn, get_settings
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agent", default="claude-acid")
+    ap.add_argument("--agent", default="acid")
     ap.add_argument("--since-min", type=int, default=1440)
     a = ap.parse_args()
 

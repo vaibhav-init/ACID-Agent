@@ -1,12 +1,8 @@
 """Backbone LLM access via a headless CLI gateway.
 
 Every backbone call (planning, decision extraction, reflection, memory
-evolution) goes through one of two gateways, selected by Settings.backbone:
-
-  claude   -> headless `claude -p` on the CLI's subscription auth
-  opencode -> headless `opencode run -m <model>` on the opencode go
-              subscription (the Qwen model family — the paper's backbone —
-              for regime experiments)
+evolution) goes through headless `opencode run -m <model>` on the opencode
+go subscription (the Qwen model family — the paper's backbone).
 
 Stateless by design: each call is a fresh session with no shared context.
 """
@@ -33,9 +29,8 @@ def _run_opencode(prompt: str, timeout_s: int, isolated: bool) -> str:
 
     stdout carries only the assistant's response; the status line and ANSI
     decoration go to stderr. Non-isolated calls run in the process cwd with
-    full agent tools — the same documented exposure as the claude path.
-    Isolated calls use the read-only `plan` agent inside a fresh empty temp
-    dir: the opencode analogue of `claude --restricted` + empty cwd.
+    full agent tools. Isolated calls use the read-only `plan` agent inside a
+    fresh empty temp dir — nothing for the model to read but the prompt.
     """
     s = get_settings()
     args = [s.opencode_bin, "run", "-m", s.opencode_model]
@@ -50,8 +45,8 @@ def _run_opencode(prompt: str, timeout_s: int, isolated: bool) -> str:
             timeout=timeout_s,
             env=env,
             cwd=sandbox if isolated else None,
-            # See the claude path below: an inherited stdin fd can leak the
-            # caller's own heredoc source into the child session.
+            # Never inherit stdin: it can hold the caller's own source
+            # (heredoc-launched evals), which a child could read back.
             stdin=subprocess.DEVNULL,
         )
     if proc.returncode != 0:
@@ -60,66 +55,31 @@ def _run_opencode(prompt: str, timeout_s: int, isolated: bool) -> str:
 
 
 def _run_cli(prompt: str, timeout_s: int = 360, isolated: bool = False) -> str:
-    """One headless backbone call, routed by Settings.backbone.
+    """One headless backbone call.
 
     `isolated=True` makes the call as close to a bare model completion as the
-    CLI allows. On claude: `--restricted` drops the code-running tools and
-    confines the file tools to the working directory, and the working directory
-    is a fresh empty temp dir, so there is nothing for the model to read.
-
-    This matters more than it looks. A plain `claude -p` is NOT a tool-free
-    completion — it retains Read/Glob/Grep and will happily go find files. A
-    denylist is not enough either: `--disallowedTools "Bash,Read,..."` was
-    observed routing around the denial through another tool. Only the empty-cwd
-    plus `--restricted` combination actually holds.
+    CLI allows: the read-only `plan` agent in a fresh empty temp cwd, so the
+    model can reason only from what the caller puts in the prompt. This
+    matters for baselines and evaluation: a model that can go find the data
+    itself would invalidate the number.
     """
-    s = get_settings()
-    if s.backbone == "opencode":
-        return _run_opencode(prompt, timeout_s=timeout_s, isolated=isolated)
-    from .claude_runner import claude_env
-
-    env = claude_env()
-    # Utility calls (plan/decisions/reflect/memory) don't need long reasoning;
-    # bounding thinking keeps router round-trips fast and avoids 4-min hangs.
-    env.setdefault("MAX_THINKING_TOKENS", "2048")
-    args = [s.claude_bin, "-p", prompt, "--output-format", "text"]
-    if isolated:
-        args += ["--restricted", "--strict-mcp-config"]
-
-    with tempfile.TemporaryDirectory(prefix="acid_isolated_") as sandbox:
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=env,
-            cwd=sandbox if isolated else None,
-            # Never inherit stdin. When the caller was itself started from a
-            # heredoc (`python - <<EOF`), that fd still holds the caller's whole
-            # source and a child can seek back to 0 and read it. That leaked
-            # seeded CSV rows straight into a supposedly isolated baseline call,
-            # which then answered correctly without taking a single action.
-            stdin=subprocess.DEVNULL,
-        )
-    if proc.returncode != 0:
-        raise RuntimeError(f"claude CLI failed (rc={proc.returncode}): {proc.stderr[-300:]}")
-    return proc.stdout
+    return _run_opencode(prompt, timeout_s=timeout_s, isolated=isolated)
 
 
 @traced("backbone.ask", run_type="llm")
 def ask(prompt: str) -> str:
     """Plain text completion from the backbone.
 
-    NOTE: this call still has Read/Glob/Grep and runs in the process's cwd (the
-    repo root), so it is not a tool-free completion. Use `ask_isolated` where
-    the model must reason only from what the caller puts in the prompt.
+    NOTE: this call still has full agent tools and runs in the process's cwd
+    (the repo root), so it is not a tool-free completion. Use `ask_isolated`
+    where the model must reason only from what the caller puts in the prompt.
     """
     return _run_cli(prompt).strip()
 
 
 @traced("backbone.ask_isolated", run_type="llm")
 def ask_isolated(prompt: str) -> str:
-    """Text completion with no tool reach: restricted mode in an empty temp cwd.
+    """Text completion with no tool reach: read-only agent in an empty temp cwd.
 
     Use this whenever the point of the measurement is what the model can do from
     the prompt alone — a baseline arm, or any evaluation where the model finding

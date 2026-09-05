@@ -2,9 +2,9 @@
 
 Usage:
   python scripts/acid_cli.py run-task "What is total revenue for north?" --agent acid
-  python scripts/acid_cli.py run-task "..." --agent claude --data-dir path/to/csvs
-  python scripts/acid_cli.py run-task "..." --agent claude-react --data-dir path/to/csvs
-  python scripts/acid_cli.py eval --agent claude-acid --runs 3
+  python scripts/acid_cli.py run-task "..." --agent baseline --data-dir path/to/csvs
+  python scripts/acid_cli.py run-task "..." --agent react --data-dir path/to/csvs
+  python scripts/acid_cli.py eval --agent acid --runs 3
   python scripts/acid_cli.py skill-register avg_monthly_revenue "Computes average monthly revenue" 
   python scripts/acid_cli.py skill-validate avg_monthly_revenue
 """
@@ -27,7 +27,7 @@ app = typer.Typer(help="ACID-Agent CLI")
 @app.command("run-task")
 def run_task_cmd(
     task: str = typer.Argument(..., help="Task text"),
-    agent: str = typer.Option("claude-acid", help="claude | claude-react | claude-acid"),
+    agent: str = typer.Option("acid", help="baseline | react | acid"),
     data_dir: str = typer.Option(None, help="Optional dir of CSVs to seed the workspace"),
     slug: str = typer.Option(None, help="Workspace name"),
 ):
@@ -44,7 +44,7 @@ def run_task_cmd(
 
 @app.command("eval")
 def eval_cmd(
-    agent: str = typer.Option("claude-acid", help="claude | claude-react | claude-acid"),
+    agent: str = typer.Option("acid", help="baseline | react | acid"),
     runs: int = typer.Option(3, help="Runs per task"),
     synthetic: bool = typer.Option(False, help="Use synthetic tasks instead of KramaBench"),
     domain: str = typer.Option("archeology", help="KramaBench domain"),
@@ -158,7 +158,7 @@ def _run_kramabench_eval(agent: str, domain: str, runs: int, task_ids: str, tag:
 @app.command("kramabench")
 def kramabench_cmd(
     action: str = typer.Argument(..., help="run | compare | domains"),
-    agent: str = typer.Option("claude-acid", help="claude | claude-react | claude-acid"),
+    agent: str = typer.Option("acid", help="baseline | react | acid"),
     domain: str = typer.Option("archeology", help="KramaBench domain"),
     runs: int = typer.Option(3, help="Runs per task"),
     task_ids: str = typer.Option("all", help="Task indices"),
@@ -174,9 +174,9 @@ def kramabench_cmd(
         _run_kramabench_eval(agent, domain, runs, task_ids, tag)
     elif action == "compare":
         typer.echo("Run both agents and compare:")
-        typer.echo(f"  python scripts/acid_cli.py eval --agent claude-acid --domain {domain} --runs {runs}")
-        typer.echo(f"  python scripts/acid_cli.py eval --agent claude --domain {domain} --runs {runs}")
-        typer.echo(f"  python scripts/acid_cli.py eval --agent claude-react --domain {domain} --runs {runs}")
+        typer.echo(f"  python scripts/acid_cli.py eval --agent acid --domain {domain} --runs {runs}")
+        typer.echo(f"  python scripts/acid_cli.py eval --agent baseline --domain {domain} --runs {runs}")
+        typer.echo(f"  python scripts/acid_cli.py eval --agent react --domain {domain} --runs {runs}")
 
 
 @app.command(name="skill-register")

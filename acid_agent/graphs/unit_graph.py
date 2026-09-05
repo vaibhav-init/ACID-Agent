@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from .. import confidence, memory, review
 from ..config import get_conn, get_settings
 from ..llm import ask, ask_structured
-from ..claude_runner import run_claude
+from ..opencode_runner import run_opencode_session
 from ..schemas import Decision, Evidence, ExecResult
 from ..validation import validate_unit
 from ..workspace import Workspace
@@ -109,7 +109,7 @@ def build_unit_graph(ws: Workspace, tracer, run_id, task_slug: str | None = None
             )
             try:
                 # Primary: backbone writes ONE read-only profiling snippet, executed directly.
-                # ~5-12s vs ~30-90s for a full claude session; same evidence for the gate.
+                # ~5-12s vs ~30-90s for a full agent session; same evidence for the gate.
                 code = ask(f"""Write ONE short read-only python script (pandas is available) that explores the
 data files in the current directory for this goal and prints concrete findings.
 Files may be CSVs or Excel workbooks (.xlsx with multiple sheets) — handle both,
@@ -124,8 +124,8 @@ Return only one python code block.
                 r = ws.run_code(snippet, name=f"explore_u{state['unit_index']}_r{rnd}.py")
                 obs_raw = r.stdout + chr(10) + r.stderr
                 if not r.ok and not r.stdout.strip():
-                    # Fallback: scripted profiling failed — escalate to a full claude session.
-                    res = run_claude(prompt, cwd=ws.root)
+                    # Fallback: scripted profiling failed — escalate to a full agent session.
+                    res = run_opencode_session(prompt, cwd=ws.root)
                     obs_raw = res.stdout if res.ok else res.stderr
                 obs = _summarize_observation(obs_raw, state["goal"])
             except Exception as e:
@@ -248,12 +248,12 @@ Known evidence:
 {state['evidence_summary'][:2000]}{feedback_note}
 
 The script must PRINT its key results clearly."""
-        res = run_claude(prompt, cwd=ws.root)
+        res = run_opencode_session(prompt, cwd=ws.root)
         script_path = ws.root / f"unit{state['unit_index']}.py"
         code = script_path.read_text(encoding="utf-8") if script_path.exists() else ""
 
         if not code:
-            # Fallback when claude returned nothing: backbone writes the script directly.
+            # Fallback when the session returned nothing: backbone writes the script directly.
             try:
                 code = _extract_code(ask(prompt)) or "# no code produced"
             except Exception as e:

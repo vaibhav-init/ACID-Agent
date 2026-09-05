@@ -19,7 +19,7 @@ from statistics import mean, variance
 import typer
 
 RESULTS = Path(__file__).resolve().parents[1] / "results"
-ORDER = ["claude", "claude-react", "claude-acid"]  # preferred column order
+ORDER = ["baseline", "react", "acid"]  # preferred column order
 
 app = typer.Typer(help="Compare agent arms from results/")
 
@@ -83,7 +83,7 @@ def main(
         raise typer.Exit(1)
 
     keys = sorted(groups, key=lambda k: (ORDER.index(k[0]) if k[0] in ORDER else len(ORDER), k))
-    base = next((k for k in keys if k[0] == "claude"), keys[0])
+    base = next((k for k in keys if k[0] == "baseline"), keys[0])
     base_raw = [s for v in groups[base]["raw"].values() for s in v]
 
     tasks = sorted({t for g in groups.values() for t in g["raw"]})

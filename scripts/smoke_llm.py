@@ -1,4 +1,4 @@
-"""Quick live check of the Claude Code CLI backbone: plain text + structured output."""
+"""Quick live check of the opencode CLI backbone: plain text + structured output."""
 
 import sys
 from pathlib import Path

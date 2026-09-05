@@ -12,7 +12,7 @@ the verdict the gate WOULD have reached and both metrics are persisted.
 
 Usage:
   python scripts/calibrate_gate.py --tag calib
-  python scripts/calibrate_gate.py --since-min 300 --agent claude-acid
+  python scripts/calibrate_gate.py --since-min 300 --agent acid
 """
 
 import argparse
@@ -31,7 +31,7 @@ def _pct(values: list[float], q: float) -> float:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agent", default="claude-acid")
+    ap.add_argument("--agent", default="acid")
     ap.add_argument("--tag", default="", help="match runs whose slug carries this --tag")
     ap.add_argument("--since-min", type=int, default=1440)
     a = ap.parse_args()

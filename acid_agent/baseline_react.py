@@ -6,26 +6,24 @@ Thought/Action/Observation loop over a Bash/Python/SQL/Terminate action space,
 with NO transactional machinery — no exploration phase, no decision extraction,
 no validation gate, no rollback.
 
-Why this exists alongside `baseline_claude.py`:
+Why this exists alongside `baseline_harness.py`:
 
-    baseline_claude  -> the Claude Code *harness* (agentic, file access, its own
+    baseline_harness -> the agent *harness* (agentic, file access, its own
                         planning and self-correction). Strong, but the harness
                         contributes capability the paper's baseline never had.
     baseline_react   -> the *model* with no harness. Every step is a stateless
-                        `claude -p` completion; this module owns the loop, the
-                        action parsing and the execution.
+                        completion; this module owns the loop, the action
+                        parsing and the execution.
 
 Both run on the CLI's subscription auth; there is no API key here.
 
-Isolation is load-bearing and was NOT free. A plain `claude -p` keeps
-Read/Glob/Grep, and the first live run of this module answered correctly in one
-step without ever emitting an action — the model had simply gone and read the
-CSV itself. Denylisting the tools did not help (`--disallowedTools` was observed
-being routed around via another tool). What holds is `llm.ask_isolated`:
-`--restricted` (no code-running tools, file tools confined to the working
-directory) with the working directory set to a fresh empty temp dir. The model
-therefore sees only what this loop puts in the prompt, and reaches the workspace
-only through actions this module executes on its behalf.
+Isolation is load-bearing and was NOT free. A plain agent session keeps
+file-reading tools, and the first live run of this module answered correctly in
+one step without ever emitting an action — the model had simply gone and read
+the CSV itself. What holds is `llm.ask_isolated`: the read-only `plan` agent
+with the working directory set to a fresh empty temp dir. The model therefore
+sees only what this loop puts in the prompt, and reaches the workspace only
+through actions this module executes on its behalf.
 
 For the same reason the prompt advertises the work dir as `.` rather than the
 real absolute path: handing over `workspaces/<slug>/` would just tell the model
@@ -379,7 +377,7 @@ def run_baseline_react(task: str, ws, tracer=None, run_id=None) -> str:
     parse_failures = 0
 
     for step in range(s.react_max_steps):
-        # `claude -p` is stateless, so the transcript is rebuilt into the prompt
+        # The backbone call is stateless, so the transcript is rebuilt into the prompt
         # each turn. Trimmed to the last N exchanges, like the reference's
         # max_memory_length, so a long run cannot outgrow the context.
         window = history[-(s.react_max_memory * 2):]

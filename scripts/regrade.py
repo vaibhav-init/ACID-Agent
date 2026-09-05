@@ -37,7 +37,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--suite", choices=["synthetic", "krama"], default="synthetic")
     ap.add_argument("--domain", default="archeology")
-    ap.add_argument("--agents", default="claude,claude-acid")
+    ap.add_argument("--agents", default="baseline,acid")
     ap.add_argument("--since-min", type=int, default=1440, help="look back this many minutes")
     ap.add_argument("--write", action="store_true", help="save regraded_*.json into results/")
     a = ap.parse_args()
