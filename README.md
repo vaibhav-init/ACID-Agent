@@ -25,15 +25,6 @@ Task ──► supervisor (≤20 units)
 The gate rejects code that contradicts the evidence gathered during exploration
 (token-level log-probability comparison, with vs without evidence), not just code that crashes.
 
-## Results
-
-Same model, same data, A/B:
-
-| | baseline | ACID |
-|---|---|---|
-| overall KramaBench (6 domains) | ~74% | ~84% |
-| hardest failures | 0% | 0% → 67% |
-
 ## Setup
 
 ```bash
