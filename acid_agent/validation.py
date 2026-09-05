@@ -85,6 +85,12 @@ Execution output:
 
 Question: does this unit's work accomplish the UNIT GOAL, grounded in the evidence?
 - The unit is one step of a larger task: do NOT demand the final answer here.
+- The unit goal is a planner-written sub-step and may be imprecise. The full Task's
+  requirements OUTRANK the goal: if the goal demands something the task does not
+  ask for, or something the evidence shows does not exist in the data (e.g. a
+  column that is not there), judge the code against the Task and evidence instead.
+  Approve work that is correct for the Task even when it deviates from a faulty
+  goal, and say so in the feedback.
 - Flag unsupported claims, decisions contradicting the evidence, ignored data quirks,
   or work that fails the unit goal.
 - If the unit goal is reasonably accomplished, approve.
