@@ -49,8 +49,10 @@ def test_numeric_strips_commas():
 
 
 def test_numeric_tolerance_band():
+    # 1% relative band, matching the reference evaluator (F1Approximate).
     assert grade_numeric(100.0, "about 99.6") == 1.0
-    assert grade_numeric(100.0, "about 99.0") == 0.0
+    assert grade_numeric(100.0, "about 99.0") == 1.0  # 1.0% — the easy-2 case class
+    assert grade_numeric(100.0, "about 98.9") == 0.0
 
 
 def test_numeric_rejects_wrong_value():
@@ -99,7 +101,7 @@ def test_approx_numeric_uses_wider_tolerance():
 
 
 def test_exact_numeric_krama_tolerance():
-    # Six-decimal correlations must survive the 0.005 relative band.
+    # Six-decimal correlations must survive the 1% relative band.
     assert grade_task(_task_obj(0.123456, "numeric_exact"), "0.12345") == 1.0
 
 

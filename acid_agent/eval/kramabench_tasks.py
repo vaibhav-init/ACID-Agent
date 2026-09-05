@@ -131,8 +131,13 @@ def _ascii_minus(s: str) -> str:
     return s.replace("\u2212", "-").replace("\u2796", "-")
 
 
-def grade_numeric(expected: float, answer: str, tol_rel: float = 0.005) -> float:
-    """Grade a numeric answer with relative tolerance (KramaBench uses 0.005).
+def grade_numeric(expected: float, answer: str, tol_rel: float = 0.01) -> float:
+    """Grade a numeric answer with relative tolerance.
+
+    1% matches the reference evaluator (Kramabench benchmark/metrics.py
+    F1Approximate: rel_err <= 0.01). The old 0.005 rejected near-miss answers
+    the paper's grader accepts — e.g. biomedical-easy-2: 68.08 vs 68.5 is a
+    0.61% error that scored 0.0 here and 1.0 in the reference.
 
     Scans every number in the answer and passes if ANY is within tolerance —
     final answers often embed the value in a sentence ("The average is 3.1333"),
